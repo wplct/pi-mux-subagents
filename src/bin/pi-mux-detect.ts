@@ -41,7 +41,7 @@ export function buildDetectionPayload({
       if (muxPreference) {
         reason = `PI_SUBAGENT_MODE=pane forced pane backend; mux=${mux} selected via PI_SUBAGENT_MUX`;
       } else {
-        reason = `PI_SUBAGENT_MODE=pane forced pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm]`;
+        reason = `PI_SUBAGENT_MODE=pane forced pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm,termio]`;
       }
     } else {
       reason = "PI_SUBAGENT_MODE=pane forced pane backend; no mux available";
@@ -51,7 +51,7 @@ export function buildDetectionPayload({
       if (muxPreference) {
         reason = `auto-selected pane backend; mux=${mux} selected via PI_SUBAGENT_MUX`;
       } else {
-        reason = `auto-selected pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm]`;
+        reason = `auto-selected pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm,termio]`;
       }
     } else {
       reason = "auto-selected headless backend; no supported mux detected";

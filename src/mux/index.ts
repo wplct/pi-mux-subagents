@@ -8,11 +8,19 @@ import { herdrAdapter } from "./adapters/herdr.ts";
 import { tmuxAdapter } from "./adapters/tmux.ts";
 import { zellijAdapter } from "./adapters/zellij.ts";
 import { weztermAdapter } from "./adapters/wezterm.ts";
+import { termioAdapter } from "./adapters/termio.ts";
 
 export type { MuxBackend } from "./types.ts";
 export { shellEscape } from "./shell.ts";
 
-const ADAPTERS: readonly MuxAdapter[] = [herdrAdapter, cmuxAdapter, tmuxAdapter, zellijAdapter, weztermAdapter];
+const ADAPTERS: readonly MuxAdapter[] = [
+  herdrAdapter,
+  cmuxAdapter,
+  tmuxAdapter,
+  zellijAdapter,
+  weztermAdapter,
+  termioAdapter,
+];
 
 export function parseMuxPreference(raw: string | undefined): {
   preference: MuxBackend | null;
@@ -22,7 +30,7 @@ export function parseMuxPreference(raw: string | undefined): {
   if (!trimmed) return { preference: null, invalidRaw: null };
   if (
     trimmed === "cmux" || trimmed === "tmux" || trimmed === "zellij" ||
-    trimmed === "wezterm" || trimmed === "herdr"
+    trimmed === "wezterm" || trimmed === "herdr" || trimmed === "termio"
   ) {
     return { preference: trimmed as MuxBackend, invalidRaw: null };
   }
@@ -59,7 +67,7 @@ export function muxSetupHint(): string {
     const adapter = ADAPTERS.find((a) => a.name === pref);
     if (adapter) return adapter.setupHint();
   }
-  return "Start pi inside cmux (`cmux pi`), tmux (`tmux new -A -s pi 'pi'`), zellij (`zellij --session pi`, then run `pi`), WezTerm, or herdr (`herdr`, then run `pi`).";
+  return "Start pi inside cmux (`cmux pi`), tmux (`tmux new -A -s pi 'pi'`), zellij (`zellij --session pi`, then run `pi`), WezTerm, herdr (`herdr`, then run `pi`), or termio (open a termio session, then run `pi`).";
 }
 
 export function isCmuxAvailable(): boolean {
@@ -80,6 +88,10 @@ export function isWezTermAvailable(): boolean {
 
 export function isHerdrAvailable(): boolean {
   return herdrAdapter.isAvailable();
+}
+
+export function isTermioAvailable(): boolean {
+  return termioAdapter.isAvailable();
 }
 
 function requireMuxAdapter(): MuxAdapter {

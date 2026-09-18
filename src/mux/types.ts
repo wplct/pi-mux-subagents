@@ -1,4 +1,4 @@
-export type MuxBackend = "cmux" | "tmux" | "zellij" | "wezterm" | "herdr";
+export type MuxBackend = "cmux" | "tmux" | "zellij" | "wezterm" | "herdr" | "termio";
 
 export interface MuxAdapter {
   readonly name: MuxBackend;

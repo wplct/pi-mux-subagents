@@ -194,8 +194,20 @@ Compatible mux implementations:
 3. `tmux`
 4. `zellij`
 5. `wezterm`
+6. `termio`
 
 The same order is used for auto-detection. Override the selection with `PI_SUBAGENT_MUX=<name>` to force one of those adapters or fail fast if that adapter is unavailable.
+
+### termio specifics
+
+`termio` panes are created through the `termio sessions` CLI, which does not need to be on `PATH`: when `termio` is not found there, the adapter falls back to `/Applications/termio.app/Contents/Resources/termio`. Point `TERMIO_CLI` at the binary to override both.
+
+The backend is selected when the process runs inside termio (`TERM_PROGRAM=termio` or `TERMIOD_SESSION_ID` set) and the CLI resolves.
+
+- New panes are anchored to the calling session, so `--direction right` is the natural default. termio only expresses `right`/`down`; `left`/`up` collapse to the nearest of those.
+- The new pane takes 35% of the split. Override with `PI_SUBAGENT_TERMIO_RATIO=0.25` (range `0 < ratio <= 1`).
+- New panes never steal keyboard focus, which is what the framework's detached launch contract expects; use `termio sessions focus` to jump to one.
+- `renameCurrentTab` / `renameWorkspace` are no-ops: the CLI exposes no rename, and termio derives session titles itself.
 
 ### `pi-mux-detect`
 
@@ -214,7 +226,7 @@ Sample output:
   "modeForced": null,
   "muxPreference": null,
   "muxPreferenceInvalid": null,
-  "reason": "auto-selected pane backend; mux=herdr from detection order [herdr,cmux,tmux,zellij,wezterm]"
+  "reason": "auto-selected pane backend; mux=herdr from detection order [herdr,cmux,tmux,zellij,wezterm,termio]"
 }
 ```
 

@@ -1199,12 +1199,176 @@ var weztermAdapter = {
   }
 };
 
+// src/mux/adapters/termio.ts
+import { execFile as execFile6, execFileSync as execFileSync7 } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+import { promisify as promisify6 } from "node:util";
+var execFileAsync6 = promisify6(execFile6);
+var DEFAULT_SPLIT_RATIO = "0.35";
+var cachedCliPath;
+function resolveTermioCliPath() {
+  if (cachedCliPath !== void 0) return cachedCliPath;
+  const override = process.env.TERMIO_CLI?.trim();
+  if (override) {
+    cachedCliPath = override;
+    return cachedCliPath;
+  }
+  if (hasCommand("termio")) {
+    cachedCliPath = "termio";
+    return cachedCliPath;
+  }
+  const bundleCandidates = [
+    "/Applications/termio.app/Contents/Resources/termio",
+    join2(homedir(), "Applications/termio.app/Contents/Resources/termio")
+  ];
+  for (const candidate of bundleCandidates) {
+    if (existsSync(candidate)) {
+      cachedCliPath = candidate;
+      return cachedCliPath;
+    }
+  }
+  cachedCliPath = null;
+  return cachedCliPath;
+}
+function mapTermioDirection(direction) {
+  return direction === "left" || direction === "right" ? "right" : "down";
+}
+function termioSplitRatio() {
+  const raw = process.env.PI_SUBAGENT_TERMIO_RATIO?.trim();
+  if (!raw) return DEFAULT_SPLIT_RATIO;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? String(parsed) : DEFAULT_SPLIT_RATIO;
+}
+function buildTermioRunArgs(params) {
+  return [
+    "sessions",
+    "run",
+    params.command,
+    "--direction",
+    mapTermioDirection(params.direction),
+    "--ratio",
+    params.ratio ?? termioSplitRatio(),
+    "--json"
+  ];
+}
+function formatTermioCliError(error, args) {
+  const stderr = error?.stderr;
+  const detail = typeof stderr === "string" ? stderr : stderr?.toString("utf8");
+  const fallback = error instanceof Error ? error.message : String(error);
+  return new Error(`termio ${args.join(" ")} failed: ${(detail ?? fallback).trim()}`);
+}
+function requireTermioCli() {
+  const cli = resolveTermioCliPath();
+  if (!cli) throw new Error(`termio CLI not found. ${termioAdapter.setupHint()}`);
+  return cli;
+}
+function runTermio(args) {
+  const cli = requireTermioCli();
+  try {
+    return execFileSync7(cli, args, { encoding: "utf8" });
+  } catch (error) {
+    throw formatTermioCliError(error, args);
+  }
+}
+function runTermioJson(args) {
+  const stdout = runTermio(args).trim();
+  if (!stdout) throw new Error(`termio ${args.join(" ")} returned empty stdout`);
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`termio ${args.join(" ")} returned non-JSON output: ${stdout.slice(0, 200)}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`termio ${args.join(" ")} returned unexpected JSON: ${stdout.slice(0, 200)}`);
+  }
+  return parsed;
+}
+var termioAdapter = {
+  name: "termio",
+  /**
+   * TERM_PROGRAM 是 termio 终端自身的标记（与 otty/orca 后端的判定方式一致），
+   * TERMIOD_SESSION_ID 是「确实挂在一个 termio 会话上」的兜底证据 ——
+   * 没有它，分屏就没有可锚定的调用方 pane。
+   */
+  isAvailable() {
+    const insideTermio = process.env.TERM_PROGRAM === "termio" || !!process.env.TERMIOD_SESSION_ID;
+    return insideTermio && resolveTermioCliPath() !== null;
+  },
+  setupHint() {
+    return "Start pi inside termio (open a termio session, then run `pi`), or point TERMIO_CLI at the termio CLI.";
+  },
+  createSurface(name, opts) {
+    return this.createSurfaceSplit(name, "right", void 0, opts);
+  },
+  /**
+   * 新建分屏 surface 并返回它的 termio://session 链接。
+   *
+   * termio 没有「建一个空 pane」的原语：`sessions run` 会新开一个 pane 并把命令敲进去。
+   * 所以这里先落成一个交互式登录 shell（`exec <shell> -l`），后续 sendCommand 才有东西可写。
+   *
+   * fromSurface 被有意忽略：termio 的分屏锚点永远是调用方自己的 pane（读 TERMIOD_SESSION_ID），
+   * 这正是子代理要的语义 —— 新 pane 贴着父 agent 开。
+   * opts.detach 天然满足：新建 pane 不抢焦点，聚焦必须显式调用 `sessions focus`。
+   */
+  createSurfaceSplit(_name, direction, _fromSurface, _opts) {
+    const shell = process.env.SHELL?.trim() || "/bin/sh";
+    const args = buildTermioRunArgs({ command: `exec ${shellEscape(shell)} -l`, direction });
+    const payload = runTermioJson(args);
+    const target = payload.target;
+    if (typeof target !== "string" || !target.startsWith("termio://session/")) {
+      throw new Error(`Unexpected termio run output: ${JSON.stringify(payload).slice(0, 200)}`);
+    }
+    return target;
+  },
+  closeSurface(surface) {
+    runTermio(["sessions", "close", surface]);
+  },
+  sendCommand(surface, command) {
+    runTermio(["sessions", "send", surface, command]);
+  },
+  /**
+   * termio 只接受命名按键，由终端自己的按键编码器生成字节。
+   * 手动写 ESC 字节在应用模式下会错位，所以必须走 `--key escape`。
+   */
+  sendEscape(surface) {
+    runTermio(["sessions", "send", surface, "--key", "escape"]);
+  },
+  readScreen(surface, lines = 50) {
+    return runTermio(["sessions", "read", surface, "--lines", String(Math.max(1, lines))]);
+  },
+  async readScreenAsync(surface, lines = 50) {
+    const cli = requireTermioCli();
+    const args = ["sessions", "read", surface, "--lines", String(Math.max(1, lines))];
+    try {
+      const { stdout } = await execFileAsync6(cli, args, { encoding: "utf8" });
+      return stdout;
+    } catch (error) {
+      throw formatTermioCliError(error, args);
+    }
+  },
+  /** termio CLI 没有改名接口（标题由 termio 按 agent 与项目自生成），保持 no-op。 */
+  renameCurrentTab(_title) {
+  },
+  renameWorkspace(_title) {
+  }
+};
+
 // src/mux/index.ts
-var ADAPTERS = [herdrAdapter, cmuxAdapter, tmuxAdapter, zellijAdapter, weztermAdapter];
+var ADAPTERS = [
+  herdrAdapter,
+  cmuxAdapter,
+  tmuxAdapter,
+  zellijAdapter,
+  weztermAdapter,
+  termioAdapter
+];
 function parseMuxPreference(raw) {
   const trimmed = (raw ?? "").trim().toLowerCase();
   if (!trimmed) return { preference: null, invalidRaw: null };
-  if (trimmed === "cmux" || trimmed === "tmux" || trimmed === "zellij" || trimmed === "wezterm" || trimmed === "herdr") {
+  if (trimmed === "cmux" || trimmed === "tmux" || trimmed === "zellij" || trimmed === "wezterm" || trimmed === "herdr" || trimmed === "termio") {
     return { preference: trimmed, invalidRaw: null };
   }
   return { preference: null, invalidRaw: trimmed };
@@ -1262,7 +1426,7 @@ function selectBackend() {
 // src/bin/pi-mux-detect.ts
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { join as join2, dirname } from "node:path";
+import { join as join3, dirname } from "node:path";
 function buildDetectionPayload({
   env,
   getMuxBackend: getMuxBackend2,
@@ -1281,7 +1445,7 @@ function buildDetectionPayload({
       if (muxPreference2) {
         reason = `PI_SUBAGENT_MODE=pane forced pane backend; mux=${mux} selected via PI_SUBAGENT_MUX`;
       } else {
-        reason = `PI_SUBAGENT_MODE=pane forced pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm]`;
+        reason = `PI_SUBAGENT_MODE=pane forced pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm,termio]`;
       }
     } else {
       reason = "PI_SUBAGENT_MODE=pane forced pane backend; no mux available";
@@ -1291,7 +1455,7 @@ function buildDetectionPayload({
       if (muxPreference2) {
         reason = `auto-selected pane backend; mux=${mux} selected via PI_SUBAGENT_MUX`;
       } else {
-        reason = `auto-selected pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm]`;
+        reason = `auto-selected pane backend; mux=${mux} from detection order [herdr,cmux,tmux,zellij,wezterm,termio]`;
       }
     } else {
       reason = "auto-selected headless backend; no supported mux detected";
@@ -1318,7 +1482,7 @@ function main() {
     process.exit(0);
   }
   if (args.includes("--version")) {
-    const pkgPath = join2(dirname(fileURLToPath(import.meta.url)), "../../package.json");
+    const pkgPath = join3(dirname(fileURLToPath(import.meta.url)), "../../package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
     process.stdout.write(pkg.version + "\n");
     process.exit(0);

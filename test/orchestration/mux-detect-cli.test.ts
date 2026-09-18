@@ -40,7 +40,7 @@ describe("CLI buildDetectionPayload with stubs", () => {
     assert.ok(result.reason.includes("mux=herdr"), `reason: ${result.reason}`);
   });
 
-  for (const mux of ["cmux", "tmux", "zellij", "wezterm"] as const) {
+  for (const mux of ["cmux", "tmux", "zellij", "wezterm", "termio"] as const) {
     it(`pane-mux=${mux} auto path`, () => {
       const result = buildDetectionPayload({
         env: {},
@@ -56,7 +56,7 @@ describe("CLI buildDetectionPayload with stubs", () => {
     });
   }
 
-  for (const mux of ["cmux", "tmux", "zellij", "wezterm"] as const) {
+  for (const mux of ["cmux", "tmux", "zellij", "wezterm", "termio"] as const) {
     it(`PI_SUBAGENT_MUX=${mux} valid preference`, () => {
       const result = buildDetectionPayload({
         env: { PI_SUBAGENT_MUX: mux },
@@ -135,6 +135,9 @@ const SAVED_KEYS = [
   "TMUX",
   "ZELLIJ", "ZELLIJ_SESSION_NAME",
   "WEZTERM_UNIX_SOCKET",
+  // termio 后端按 TERM_PROGRAM/TERMIOD_SESSION_ID 判定。本测试套件必须清掉它们，
+  // 否则在 termio 里跑测试时 baseline 用例会真的检测到 termio 而不再是 headless。
+  "TERM_PROGRAM", "TERMIOD_SESSION_ID", "TERMIO_SESSION", "TERMIO_CLI",
   "PATH",
 ];
 

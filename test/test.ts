@@ -22,6 +22,7 @@ import {
   isCmuxAvailable,
   isWezTermAvailable,
   isHerdrAvailable,
+  isTermioAvailable,
   muxSetupHint,
   getMuxBackend,
 } from "../src/mux/index.ts";
@@ -61,6 +62,14 @@ import {
   selectZellijPlacement,
   selectZellijStackPlacement,
 } from "../src/mux/adapters/zellij.ts";
+import {
+  __test__ as termioTest,
+  buildTermioRunArgs,
+  mapTermioDirection,
+  resolveTermioCliPath,
+  termioAdapter,
+  termioSplitRatio,
+} from "../src/mux/adapters/termio.ts";
 import {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
@@ -1357,6 +1366,144 @@ describe("mux", () => {
     it("returns boolean based on HERDR_ENV", () => {
       const result = isHerdrAvailable();
       assert.equal(typeof result, "boolean");
+    });
+  });
+
+  describe("isTermioAvailable", () => {
+    it("returns boolean based on TERM_PROGRAM/TERMIOD_SESSION_ID", () => {
+      const result = isTermioAvailable();
+      assert.equal(typeof result, "boolean");
+    });
+  });
+
+  describe("termio adapter", () => {
+    const TERMIO_KEYS = [
+      "TERM_PROGRAM",
+      "TERMIOD_SESSION_ID",
+      "TERMIO_SESSION",
+      "TERMIO_CLI",
+      "PI_SUBAGENT_TERMIO_RATIO",
+    ] as const;
+
+    function snapshotTermioEnv(): Record<string, string | undefined> {
+      const snap: Record<string, string | undefined> = {};
+      for (const k of TERMIO_KEYS) snap[k] = process.env[k];
+      return snap;
+    }
+
+    function restoreTermioEnv(snap: Record<string, string | undefined>): void {
+      for (const k of TERMIO_KEYS) restoreEnvVar(k, snap[k]);
+      termioTest.clearCliPathCache();
+    }
+
+    it("identifies itself and names termio in its setup hint", () => {
+      assert.equal(termioAdapter.name, "termio");
+      assert.match(termioAdapter.setupHint(), /termio/i);
+    });
+
+    it("collapses directions termio cannot express into right/down", () => {
+      assert.equal(mapTermioDirection("right"), "right");
+      assert.equal(mapTermioDirection("left"), "right");
+      assert.equal(mapTermioDirection("down"), "down");
+      assert.equal(mapTermioDirection("up"), "down");
+    });
+
+    it("builds the run argv with a normalized direction, ratio and JSON output", () => {
+      const env = snapshotTermioEnv();
+      try {
+        delete process.env.PI_SUBAGENT_TERMIO_RATIO;
+        assert.deepEqual(buildTermioRunArgs({ command: "exec /bin/zsh -l", direction: "left" }), [
+          "sessions",
+          "run",
+          "exec /bin/zsh -l",
+          "--direction",
+          "right",
+          "--ratio",
+          "0.35",
+          "--json",
+        ]);
+
+        const explicit = buildTermioRunArgs({ command: "x", direction: "up", ratio: "0.6" });
+        assert.equal(explicit[explicit.indexOf("--direction") + 1], "down");
+        assert.equal(explicit[explicit.indexOf("--ratio") + 1], "0.6");
+      } finally {
+        restoreTermioEnv(env);
+      }
+    });
+
+    it("keeps the default split ratio when PI_SUBAGENT_TERMIO_RATIO is invalid", () => {
+      const env = snapshotTermioEnv();
+      try {
+        for (const bad of ["", "0", "-1", "1.5", "abc"]) {
+          process.env.PI_SUBAGENT_TERMIO_RATIO = bad;
+          assert.equal(termioSplitRatio(), "0.35", `ratio for ${JSON.stringify(bad)}`);
+        }
+        process.env.PI_SUBAGENT_TERMIO_RATIO = "0.25";
+        assert.equal(termioSplitRatio(), "0.25");
+      } finally {
+        restoreTermioEnv(env);
+      }
+    });
+
+    it("prefers the TERMIO_CLI override when resolving the CLI", () => {
+      const env = snapshotTermioEnv();
+      try {
+        termioTest.clearCliPathCache();
+        process.env.TERMIO_CLI = "/nonexistent/termio";
+        assert.equal(resolveTermioCliPath(), "/nonexistent/termio");
+      } finally {
+        restoreTermioEnv(env);
+      }
+    });
+
+    it("reports unavailable when the process is not attached to termio", () => {
+      const env = snapshotTermioEnv();
+      try {
+        termioTest.clearCliPathCache();
+        delete process.env.TERM_PROGRAM;
+        delete process.env.TERMIOD_SESSION_ID;
+        delete process.env.TERMIO_SESSION;
+        assert.equal(termioAdapter.isAvailable(), false);
+      } finally {
+        restoreTermioEnv(env);
+      }
+    });
+
+    it("rejects non-JSON CLI output instead of inventing a surface", () => {
+      const env = snapshotTermioEnv();
+      const dir = mkdtempSync(join(tmpdir(), "termio-stub-"));
+      try {
+        const stub = join(dir, "termio");
+        writeFileSync(stub, "#!/bin/sh\necho not-json\n", { mode: 0o755 });
+        termioTest.clearCliPathCache();
+        process.env.TERMIO_CLI = stub;
+        assert.throws(
+          () => termioAdapter.createSurfaceSplit("probe", "right"),
+          /non-JSON output/,
+        );
+      } finally {
+        restoreTermioEnv(env);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("returns the session link that termio reports for a new pane", () => {
+      const env = snapshotTermioEnv();
+      const dir = mkdtempSync(join(tmpdir(), "termio-stub-"));
+      try {
+        const stub = join(dir, "termio");
+        writeFileSync(
+          stub,
+          '#!/bin/sh\necho \'{"created":true,"ok":true,"target":"termio://session/abc"}\'\n',
+          { mode: 0o755 },
+        );
+        termioTest.clearCliPathCache();
+        process.env.TERMIO_CLI = stub;
+        assert.equal(termioAdapter.createSurfaceSplit("probe", "right"), "termio://session/abc");
+      } finally {
+        restoreTermioEnv(env);
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
